@@ -2,6 +2,26 @@
 
 Image-to-Pixel is a high-performance, browser-based image processing system that converts images into pixel art using sophisticated dithering algorithms and customizable color palettes. Built entirely in JavaScript, it provides both an interactive web application and a powerful API for integration into other projects.
 
+## 🚀 NEW: Batch Processing Script
+
+Need to pixelate hundreds of images? We've got you covered with a simple Node.js script for batch processing.
+
+### Quick Start - Batch Processing
+
+```bash
+# Install dependencies
+npm install
+
+# Process all images in a directory
+node pixelate.js --in ./images --out ./pixel-art --size 128
+
+# Examples:
+node pixelate.js --in photos --out output --size 64    # 64px wide pixel art
+node pixelate.js --in dataset --out training --size 32  # 32px for training data
+```
+
+That's it. No complex configuration. It just works.
+
 ## Key Features
 
 - **Real-time Processing**: Instant pixel art conversion with live preview
