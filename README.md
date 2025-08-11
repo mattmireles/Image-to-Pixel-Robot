@@ -22,6 +22,40 @@ node pixelate.js --in dataset --out training --size 32  # 32px for training data
 
 That's it. No complex configuration. It just works.
 
+## 🎬 Example: Alien (1979) Facehugger
+
+Transform cinematic imagery into striking pixel art with different resolution and dithering settings:
+
+### Original Image
+![Original Alien Facehugger](examples/alien-original.jpeg)
+
+### Pixelated Variations
+
+<table>
+<tr>
+<td align="center">
+<img src="examples/alien-pixel-1.png" alt="Low Resolution Pixel Art" width="400"/>
+<br><b>32px Wide</b><br>Heavy palette reduction
+</td>
+<td align="center">
+<img src="examples/alien-pixel-2.png" alt="Medium Resolution with Dithering" width="400"/>
+<br><b>128px Wide with Dithering</b><br>Floyd-Steinberg dithering
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="examples/alien-pixel-3.png" alt="High Contrast Pixel Art" width="400"/>
+<br><b>64px Wide</b><br>High contrast palette
+</td>
+<td align="center">
+<img src="examples/alien-original.jpeg" alt="Original for comparison" width="400"/>
+<br><b>Original</b><br>For comparison
+</td>
+</tr>
+</table>
+
+Each variation demonstrates different artistic possibilities - from retro gaming aesthetics to modern pixel art styles.
+
 ## Key Features
 
 - **Real-time Processing**: Instant pixel art conversion with live preview
