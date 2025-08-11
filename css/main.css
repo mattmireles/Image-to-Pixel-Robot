@@ -343,6 +343,14 @@
      gap: 5px;
  }
 
+ #palette-info {
+     position: absolute;
+     bottom: 5px;
+     right: 5px;
+     font-size: 0.7rem;
+     color: var(--color-text-secondary);
+ }
+
  .main-content {
      flex: 1;
      position: relative;
@@ -351,6 +359,7 @@
      align-items: center;
      justify-content: center;
      overflow: hidden;
+     gap: 10px;
  }
 
  .canvas-wrapper {
@@ -361,6 +370,30 @@
      align-items: center;
      padding: 20px;
  }
+
+ .dropzone-extra {
+     position: absolute;
+     top: 20px;
+     right: 20px;
+     width: 150px;
+     height: 150px;
+     border: 2px dashed var(--color-border);
+     border-radius: 10px;
+     display: flex;
+     justify-content: center;
+     align-items: center;
+     text-align: center;
+     font-size: 0.9rem;
+     color: var(--color-text-secondary);
+     cursor: pointer;
+     transition: all var(--transition-speed) ease;
+ }
+
+ .dropzone-extra:hover {
+     border-color: var(--color-accent);
+     color: var(--color-text);
+ }
+
 
  #dropzone {
      width: 100%;

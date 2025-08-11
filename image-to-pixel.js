@@ -388,6 +388,21 @@ function convertP5GraphicsToCanvas(p5Graphics) {
 function loadOriginalImage(src) {
     return new Promise((resolve, reject) => {
         try {
+            // Handle File objects by creating a data URL
+            if (src instanceof File) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.crossOrigin = 'Anonymous';
+                    img.src = e.target.result;
+                    img.onload = () => resolve(img);
+                    img.onerror = (err) => reject(new Error(`Failed to load image from file: ${err.message}`));
+                };
+                reader.onerror = (err) => reject(new Error(`FileReader error: ${err.message}`));
+                reader.readAsDataURL(src);
+                return;
+            }
+
             // Directly resolve if the source is an HTMLImageElement
             if (src instanceof HTMLImageElement) {
                 resolve(src);

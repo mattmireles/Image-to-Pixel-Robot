@@ -233,10 +233,15 @@
       <div id="dropzone">
         <p>Drop an image or click to upload</p>
       </div>
+       <div id="target-dropzone" class="dropzone-extra">
+        <p>Drop a target style image here</p>
+        <span id="palette-info"></span>
+      </div>
       <div class="canvas-wrapper">
         <canvas id="canvas"></canvas>
       </div>
       <input type="file" id="fileInput" style="display:none" accept="image/*">
+      <input type="file" id="target-file-input" style="display:none" accept="image/*">
     </div>
   </div>
   <script src="src/logo.js"></script>
@@ -347,6 +352,9 @@
 
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');
+        const targetDropzone = document.getElementById('target-dropzone');
+        const targetFileInput = document.getElementById('target-file-input');
+        const paletteInfo = document.getElementById('palette-info');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const pixelateButton = document.getElementById('pixelateButton');
@@ -374,8 +382,10 @@
 
         let originalImageObject = null;
         let pixelatedCanvas = null;
+        let customPaletteFromImage = null;
 
         dropzone.addEventListener('click', () => fileInput.click());
+        targetDropzone.addEventListener('click', () => targetFileInput.click());
 
         fileInput.addEventListener('change', (event) => {
             const file = event.target.files[0];
@@ -395,6 +405,96 @@
             const files = event.dataTransfer.files;
             if (files.length) displayImage(files[0]);
         });
+
+        targetFileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) handleTargetImage(file);
+        });
+
+        targetDropzone.addEventListener('dragover', (event) => {
+            event.preventDefault();
+            targetDropzone.style.borderColor = '#0084ff';
+        });
+
+        targetDropzone.addEventListener('dragleave', () => {
+            targetDropzone.style.borderColor = '#cccccc';
+        });
+
+        targetDropzone.addEventListener('drop', (event) => {
+            event.preventDefault();
+            targetDropzone.style.borderColor = '#cccccc';
+            const files = event.dataTransfer.files;
+            if (files.length) handleTargetImage(files[0]);
+        });
+
+        function handleTargetImage(file) {
+            extractPaletteFromImage(file).then(palette => {
+                customPaletteFromImage = palette;
+                paletteInfo.textContent = `${palette.length} colors`;
+
+                // Add or update the custom palette option in the dropdown
+                const customSelector = document.getElementById('custom-palette-selector');
+                let option = customSelector.querySelector('option[value="from-image"]');
+                if (!option) {
+                    option = document.createElement('option');
+                    option.value = 'from-image';
+                    option.textContent = 'From Target Image';
+                    customSelector.appendChild(option);
+                }
+                customSelector.value = 'from-image';
+
+                // Manually set the activePalette and trigger a re-pixelation
+                activePalette = customPaletteFromImage;
+                // Deactivate other toggles
+                toggles.forEach(btn => {
+                    if (btn.id !== 'autoPixelateToggle' && btn.id !== 'palette-toggle') {
+                        btn.classList.remove('active');
+                        btn.setAttribute('aria-pressed', 'false');
+                    }
+                });
+                const paletteToggle = document.getElementById('palette-toggle');
+                if (!paletteToggle.classList.contains('active')) {
+                    paletteToggle.classList.add('active');
+                    paletteToggle.setAttribute('aria-pressed', 'true');
+                }
+                activeToggle = paletteToggle;
+
+                // Update the color list UI
+                activePalette = customPaletteFromImage.map(rgb => {
+                    return `#${rgb.map(c => c.toString(16).padStart(2, '0')).join('')}`;
+                });
+                updateColorList();
+
+
+                if (autoPixelateEnabled) applyPixelation();
+            }).catch(error => {
+                console.error("Error extracting palette:", error);
+                paletteInfo.textContent = "Error";
+            });
+        }
+
+        async function extractPaletteFromImage(file) {
+            const image = await loadOriginalImage(file);
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = image.width;
+            tempCanvas.height = image.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(image, 0, 0);
+
+            const imageData = tempCtx.getImageData(0, 0, image.width, image.height).data;
+            const colorSet = new Set();
+
+            for (let i = 0; i < imageData.length; i += 4) {
+                // Ignore transparent pixels
+                if (imageData[i + 3] === 0) continue;
+                colorSet.add(`${imageData[i]},${imageData[i+1]},${imageData[i+2]}`);
+            }
+
+            return Array.from(colorSet).map(rgbString => {
+                return rgbString.split(',').map(num => parseInt(num, 10));
+            });
+        }
+
 
         /**
          * Display uploaded image in the canvas with proper scaling.
@@ -479,15 +579,9 @@
             const ditheringMethod = ditheringSelect.value;
             const ditheringStrength = parseInt(ditheringStrengthInput.value); // Strength is 0-100
 
-            let palette = null;
-            if (paletteName) {
-                palette = paletteName;
-            }
-
-            let paletteToUse = activePalette;
-
-            if (activeToggle.id === 'lospec-toggle') {
-                paletteToUse = palette;
+            let paletteToUse;
+            if (activeToggle && activeToggle.id === 'lospec-toggle') {
+                paletteToUse = paletteName;
             } else {
                 paletteToUse = activePalette;
             }
@@ -598,15 +692,9 @@
             const ditheringMethod = ditheringSelect.value;
             const ditheringStrength = parseInt(ditheringStrengthInput.value);
 
-            let palette = null;
-            if (paletteName) {
-                palette = paletteName;
-            }
-
-            let paletteToUse = activePalette;
-
-            if (activeToggle.id === 'lospec-toggle') {
-                paletteToUse = palette;
+            let paletteToUse;
+            if (activeToggle && activeToggle.id === 'lospec-toggle') {
+                paletteToUse = paletteName;
             } else {
                 paletteToUse = activePalette;
             }
