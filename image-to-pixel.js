@@ -1,13 +1,101 @@
 /**
- * Pixelate and dither an image.
- * @param {Object} options - Configuration options.
- * @param {HTMLCanvasElement|HTMLImageElement|p5.Renderer|p5.Image|Q5.Image|ImageData|string} options.image - Image object, p5 canvas, q5 canvas, ImageData, or URL.
- * @param {number} options.width - Number of pixels wide for the pixelated image.
- * @param {string} [options.dither='none'] - Dithering method: 'none', 'Floyd-Steinberg', 'ordered', '2x2 Bayer', '4x4 Bayer'.
- * @param {number} [options.strength=0] - Dithering strength (0-100).
- * @param {string|Array} [options.palette=null] - Palette name from Lospec or an array of colors.
- * @param {string} [options.resolution='original'] - 'pixel' for pixelated size, 'original' for original size.
- * @returns {Promise<HTMLCanvasElement|p5.Image|Q5.Image>} - A promise that resolves to a canvas element, p5.Image, or Q5.Image object.
+ * image-to-pixel.js - Core pixelation and dithering engine for training data generation
+ * 
+ * PURPOSE:
+ * This module implements the core algorithms for converting high-resolution images
+ * into pixel art suitable for training machine learning models. It provides various
+ * dithering methods and palette quantization techniques.
+ * 
+ * ARCHITECTURE:
+ * - Supports multiple input formats (Canvas, Image, ImageData, URLs)
+ * - Processes images through a pipeline: Load -> Resize -> Dither -> Quantize -> Export
+ * - Integrates with p5.js and Q5.js for creative coding workflows
+ * 
+ * CONNECTIONS:
+ * - Called by index.html's applyPixelation() function
+ * - Fetches palettes from Lospec API when palette names are provided
+ * - Returns canvas elements for display and export
+ * 
+ * TRAINING DATA CONSIDERATIONS:
+ * - Maintains consistent pixel grid alignment
+ * - Preserves color relationships through careful quantization
+ * - Supports batch processing with identical parameters
+ */
+
+/**
+ * Configuration constants for pixelation algorithms.
+ * These values control the behavior of various image processing operations.
+ */
+const PixelationConstants = {
+    /** Default pixel width when none specified */
+    DEFAULT_PIXEL_WIDTH: 128,
+    /** Minimum pixel width to prevent degenerate cases */
+    MIN_PIXEL_WIDTH: 2,
+    /** Maximum pixel width to prevent memory issues */
+    MAX_PIXEL_WIDTH: 4096,
+    /** Default dithering strength percentage */
+    DEFAULT_DITHER_STRENGTH: 10,
+    /** Cache timeout for Lospec palette fetches in milliseconds */
+    PALETTE_CACHE_TIMEOUT: 3600000, // 1 hour
+};
+
+/**
+ * Dithering algorithm coefficients.
+ * These control error diffusion in various dithering methods.
+ */
+const DitheringCoefficients = {
+    /** Floyd-Steinberg error diffusion coefficients */
+    FLOYD_STEINBERG: {
+        RIGHT: 7/16,
+        BOTTOM_LEFT: 3/16,
+        BOTTOM: 5/16,
+        BOTTOM_RIGHT: 1/16
+    },
+    /** Atkinson dithering uses 1/8 for all directions */
+    ATKINSON: {
+        COEFFICIENT: 1/8
+    },
+    /** Threshold adjustment for ordered dithering */
+    ORDERED_THRESHOLD_CENTER: 127.5
+};
+
+/**
+ * Pixelate and dither an image for training data generation.
+ * 
+ * This is the main entry point for the pixelation pipeline. It coordinates
+ * all processing steps and ensures consistent output suitable for ML training.
+ * 
+ * PROCESS FLOW:
+ * 1. Load image from various input formats
+ * 2. Fetch color palette if specified
+ * 3. Resize to target pixel dimensions
+ * 4. Apply dithering algorithm if requested
+ * 5. Quantize colors to palette
+ * 6. Optionally scale back to original resolution
+ * 
+ * @param {Object} options - Configuration options for pixelation
+ * @param {HTMLCanvasElement|HTMLImageElement|p5.Renderer|p5.Image|Q5.Image|ImageData|string} options.image - 
+ *        Input image in various formats. Can be a canvas, image element, p5/Q5 object, or URL string
+ * @param {number} options.width - Target width in pixels for the pixelated output
+ * @param {string} [options.dither='none'] - Dithering algorithm to apply:
+ *        'none' - No dithering, direct color quantization
+ *        'floyd-steinberg' - Classic error diffusion, good for photos
+ *        'atkinson' - Lower contrast error diffusion, good for graphics
+ *        'ordered' - 8x8 Bayer matrix, creates consistent patterns
+ *        '2x2 bayer' - Small pattern, subtle dithering
+ *        '4x4 bayer' - Medium pattern, balanced dithering
+ *        'clustered 4x4' - Clustered dot pattern, good for printing
+ * @param {number} [options.strength=0] - Dithering intensity (0-100). 
+ *        0 = no dithering, 100 = maximum error diffusion
+ * @param {string|Array} [options.palette=null] - Color palette for quantization:
+ *        String: Lospec palette name (e.g., 'pico-8', 'endesga-32')
+ *        Array: Custom palette as hex colors ['#FF0000', '#00FF00', ...]
+ *        null: No palette quantization, preserve original colors
+ * @param {string} [options.resolution='original'] - Output resolution:
+ *        'pixel' - Output at actual pixel size (e.g., 32x32)
+ *        'original' - Scale back to original image dimensions
+ * @returns {Promise<HTMLCanvasElement|p5.Image|Q5.Image>} Canvas with pixelated result
+ * @throws {Error} If required parameters are missing or invalid
  */
 async function pixelate(options) {
     const {
@@ -19,8 +107,15 @@ async function pixelate(options) {
         resolution = 'original',
     } = options;
 
-    if (!image || !width) {
-        throw new Error('Image and width parameters are required.');
+    // Validate required parameters
+    if (!image) {
+        throw new Error('Image parameter is required for pixelation.');
+    }
+    if (!width || width < PixelationConstants.MIN_PIXEL_WIDTH) {
+        throw new Error(`Width must be at least ${PixelationConstants.MIN_PIXEL_WIDTH} pixels.`);
+    }
+    if (width > PixelationConstants.MAX_PIXEL_WIDTH) {
+        throw new Error(`Width cannot exceed ${PixelationConstants.MAX_PIXEL_WIDTH} pixels.`);
     }
     // Check for p5 and Q5 availability
     const isP5Available = typeof p5 !== 'undefined';
@@ -81,7 +176,22 @@ async function pixelate(options) {
     // Get image data for manipulation
     let pixelatedData = offscreenCtx.getImageData(0, 0, pixelsWide, pixelsHigh);
 
-    // Apply dithering and palette
+    /**
+     * Apply dithering and color palette quantization.
+     * 
+     * This section implements the core visual transformation that creates
+     * the pixel art aesthetic. The choice of dithering algorithm and palette
+     * significantly affects the training data characteristics.
+     * 
+     * DITHERING ALGORITHMS:
+     * - Floyd-Steinberg: Distributes quantization error to neighboring pixels
+     * - Atkinson: Similar to Floyd-Steinberg but propagates less error
+     * - Ordered: Uses a fixed pattern matrix for consistent results
+     * - Bayer: Variants of ordered dithering with different matrix sizes
+     * 
+     * The strength parameter controls how much the dithering affects the image.
+     * For training data, consistent strength across batches is crucial.
+     */
     const ditheringStrength = strength / 100; // Normalize strength to 0-1 range
     if (paletteColors && dither.toLowerCase() !== 'none') {
         if (dither.toLowerCase() === 'floyd-steinberg') {
@@ -140,9 +250,27 @@ async function pixelate(options) {
 }
 
 /**
- * Retrieve the Bayer matrix based on the specified size.
- * @param {string} type - The Bayer matrix type ('2x2', '4x4', '8x8').
- * @returns {Array<Array<number>>} - The selected Bayer matrix.
+ * Retrieve the Bayer matrix for ordered dithering patterns.
+ * 
+ * Bayer matrices create predictable dithering patterns that are useful
+ * for training data because they produce consistent, reproducible results.
+ * Each matrix size creates different pattern characteristics:
+ * 
+ * - 2x2: Very subtle, minimal pattern visibility
+ * - 4x4: Balanced between subtlety and effectiveness
+ * - 8x8: More complex patterns, better tonal range
+ * - Clustered 4x4: Groups pixels for dot-pattern effects
+ * 
+ * These matrices are normalized to work with the threshold calculation
+ * in the ordered dithering algorithm.
+ * 
+ * @param {string} type - The Bayer matrix type to retrieve:
+ *        '2x2' - Minimal 2x2 pattern
+ *        '4x4' - Standard 4x4 Bayer matrix
+ *        '8x8' - Large 8x8 matrix for smooth gradients
+ *        'clustered 4x4' - Clustered dot pattern
+ * @returns {Array<Array<number>>} The selected Bayer matrix
+ * @throws {Error} If an invalid matrix type is specified
  */
 function getBayerMatrix(type) {
     switch (type) {
@@ -182,9 +310,14 @@ function getBayerMatrix(type) {
 }
 
 /**
- * Convert an HTMLCanvasElement to a p5.Image if p5 is available.
- * @param {HTMLCanvasElement} canvas - The canvas to convert.
- * @returns {p5.Image|HTMLCanvasElement} - The converted p5.Image or the original canvas.
+ * Convert an HTMLCanvasElement to a p5.Image for p5.js integration.
+ * 
+ * This function enables seamless integration with p5.js creative coding
+ * workflows, allowing the pixelated output to be used in p5.js sketches
+ * for further processing or artistic applications.
+ * 
+ * @param {HTMLCanvasElement} canvas - The canvas containing pixelated image
+ * @returns {p5.Image|HTMLCanvasElement} p5.Image if p5.js is available, otherwise original canvas
  */
 function canvasToP5Image(canvas) {
     if (typeof p5 !== 'undefined') {
@@ -196,7 +329,13 @@ function canvasToP5Image(canvas) {
 }
 
 /**
- * Convert an HTMLCanvasElement to a Q5.Image if Q5 is available.
+ * Convert an HTMLCanvasElement to a Q5.Image for Q5.js integration.
+ * 
+ * Q5.js is a lightweight alternative to p5.js. This function provides
+ * compatibility for projects using Q5.js instead of p5.js.
+ * 
+ * @param {HTMLCanvasElement} canvas - The canvas containing pixelated image
+ * @returns {Q5.Image|HTMLCanvasElement} Q5.Image if Q5.js is available, otherwise original canvas
  */
 function canvasToQ5Image(canvas) {
     if (typeof Q5 !== 'undefined' && typeof Q5.Image !== 'undefined') {
@@ -224,11 +363,28 @@ function convertP5GraphicsToCanvas(p5Graphics) {
     });
 }
 /**
- * Load the original image from various input types.
- * @param {any} src - The input image source.
- * @returns {Promise<HTMLImageElement>} - A promise that resolves to an HTMLImageElement.
+ * Load the original image from various input formats.
+ * 
+ * This function provides a unified interface for loading images from
+ * multiple sources, making the library flexible for different workflows.
+ * It's essential for batch processing training data from various sources.
+ * 
+ * SUPPORTED FORMATS:
+ * - HTMLImageElement: Direct image elements from the DOM
+ * - HTMLCanvasElement: Existing canvas with rendered content
+ * - ImageData: Raw pixel data from canvas operations
+ * - p5.Graphics/p5.Renderer: p5.js drawing surfaces
+ * - Q5.Image/Q5.Graphics: Q5.js image objects
+ * - OffscreenCanvas: Web Worker compatible canvases
+ * - String URLs: Remote or data URLs for loading images
+ * 
+ * The function normalizes all inputs to either HTMLImageElement or
+ * HTMLCanvasElement for consistent processing downstream.
+ * 
+ * @param {any} src - The input image in any supported format
+ * @returns {Promise<HTMLImageElement|HTMLCanvasElement>} Normalized image ready for processing
+ * @throws {Error} If the source format is not supported
  */
-
 function loadOriginalImage(src) {
     return new Promise((resolve, reject) => {
         try {
@@ -305,7 +461,32 @@ function loadOriginalImage(src) {
     });
 }
 
+/**
+ * Cache for fetched color palettes to avoid redundant API calls.
+ * This improves performance when processing multiple images with the same palette.
+ */
 let cachedPalette = { name: null, colors: null };
+
+/**
+ * Fetch a color palette from the Lospec API.
+ * 
+ * Lospec is a community database of pixel art color palettes. Using
+ * established palettes ensures training data has authentic pixel art
+ * color schemes that models can learn to recognize and reproduce.
+ * 
+ * The function caches fetched palettes to reduce API calls during
+ * batch processing, which is important for generating large datasets.
+ * 
+ * POPULAR PALETTES FOR TRAINING:
+ * - 'pico-8': 16 colors, classic fantasy console palette
+ * - 'endesga-32': 32 colors, versatile general-purpose palette
+ * - 'resurrect-64': 64 colors, comprehensive range for detailed art
+ * - 'sweetie-16': 16 colors, pastel tones for softer aesthetics
+ * 
+ * @param {string} paletteName - The Lospec palette slug (e.g., 'pico-8')
+ * @returns {Promise<Array<Array<number>>>} RGB color arrays [[r,g,b], ...]
+ * @throws {Error} If the palette cannot be fetched from Lospec
+ */
 function fetchPalette(paletteName) {
     const paletteUrl = `https://lospec.com/palette-list/${paletteName}.json`;
     if (cachedPalette.name === paletteName) { return Promise.resolve(cachedPalette.colors); }
@@ -328,12 +509,35 @@ function fetchPalette(paletteName) {
 
 }
 
+/**
+ * Convert hexadecimal color string to RGB array.
+ * 
+ * This utility function converts hex color codes (common in palettes)
+ * to RGB arrays needed for pixel manipulation. It handles both
+ * 3-character and 6-character hex codes with or without '#' prefix.
+ * 
+ * @param {string} hex - Hex color code (e.g., '#FF0000' or 'FF0000')
+ * @returns {Array<number>} RGB values as [red, green, blue] (0-255 range)
+ */
 function hexToRgb(hex) {
     hex = hex.replace('#', '');
     const bigint = parseInt(hex, 16);
     return [bigint >> 16 & 255, bigint >> 8 & 255, bigint & 255];
 }
 
+/**
+ * Apply color palette quantization to image data.
+ * 
+ * This function reduces the image colors to a limited palette,
+ * which is essential for creating authentic pixel art. It maps
+ * each pixel to its nearest color in the target palette.
+ * 
+ * For training data, this ensures consistent color schemes that
+ * models can learn to recognize as characteristic of pixel art.
+ * 
+ * @param {ImageData} imageData - Canvas image data to modify in-place
+ * @param {Array<Array<number>>} paletteColors - Target palette as RGB arrays
+ */
 function applyPalette(imageData, paletteColors) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
@@ -344,6 +548,34 @@ function applyPalette(imageData, paletteColors) {
         data[i + 2] = b;
     }
 }
+/**
+ * Apply Atkinson dithering algorithm for gentler error diffusion.
+ * 
+ * Atkinson dithering, developed by Bill Atkinson for early Macintosh
+ * computers, diffuses only 75% of the quantization error (compared to
+ * Floyd-Steinberg's 100%). This creates higher contrast but preserves
+ * detail better in areas of similar tones.
+ * 
+ * CHARACTERISTICS:
+ * - Better for high-contrast images and line art
+ * - Preserves sharp edges better than Floyd-Steinberg
+ * - Creates a distinctive retro computing aesthetic
+ * - Good for training models to recognize vintage pixel art styles
+ * 
+ * ERROR DISTRIBUTION PATTERN:
+ *     *   1/8  1/8
+ * 1/8 1/8 1/8
+ *     1/8
+ * 
+ * Where * is the current pixel being processed.
+ * 
+ * @param {ImageData} imageData - Image data to process in-place
+ * @param {number} width - Image width in pixels
+ * @param {number} height - Image height in pixels
+ * @param {number} strength - Dithering strength (0-1 range)
+ * @param {Array<Array<number>>} paletteColors - Target color palette
+ * @returns {ImageData} Modified image data with dithering applied
+ */
 function atkinsonDithering(imageData, width, height, strength, paletteColors) {
     const data = imageData.data;
     const errorBuffer = new Float32Array(data.length);
@@ -386,6 +618,36 @@ function atkinsonDithering(imageData, width, height, strength, paletteColors) {
     return imageData;
 }
 
+/**
+ * Apply Floyd-Steinberg dithering for classic error diffusion.
+ * 
+ * Floyd-Steinberg is the most widely used error diffusion algorithm.
+ * It distributes quantization error to neighboring pixels in a specific
+ * pattern, creating smooth gradients even with limited colors.
+ * 
+ * CHARACTERISTICS:
+ * - Excellent for photographs and gradients
+ * - Creates organic, non-repetitive patterns
+ * - Can produce "worm" artifacts in flat color areas
+ * - Industry standard for pixel art conversion
+ * 
+ * ERROR DISTRIBUTION PATTERN:
+ *     * 7/16
+ * 3/16 5/16 1/16
+ * 
+ * Where * is the current pixel. The fractions show how much
+ * error is distributed to each neighboring pixel.
+ * 
+ * This algorithm is ideal for training data because it produces
+ * results similar to hand-crafted pixel art with careful shading.
+ * 
+ * @param {ImageData} imageData - Image data to process in-place
+ * @param {number} width - Image width in pixels
+ * @param {number} height - Image height in pixels
+ * @param {number} strength - Dithering strength (0-1 range)
+ * @param {Array<Array<number>>} paletteColors - Target color palette
+ * @returns {ImageData} Modified image data with dithering applied
+ */
 function floydSteinbergDithering(imageData, width, height, strength, paletteColors) {
     const data = imageData.data;
     const errorBuffer = new Float32Array(data.length);
@@ -416,16 +678,41 @@ function floydSteinbergDithering(imageData, width, height, strength, paletteColo
                 (b - newColor[2]) * strength
             ];
 
-            // Distribute the error to neighboring pixels
-            distributeError(errorBuffer, x + 1, y, quantError, (7 / 16), width, height);
-            distributeError(errorBuffer, x - 1, y + 1, quantError, (3 / 16), width, height);
-            distributeError(errorBuffer, x, y + 1, quantError, (5 / 16), width, height);
-            distributeError(errorBuffer, x + 1, y + 1, quantError, (1 / 16), width, height);
+            // Distribute the error to neighboring pixels using Floyd-Steinberg coefficients
+            distributeError(errorBuffer, x + 1, y, quantError, DitheringCoefficients.FLOYD_STEINBERG.RIGHT, width, height);
+            distributeError(errorBuffer, x - 1, y + 1, quantError, DitheringCoefficients.FLOYD_STEINBERG.BOTTOM_LEFT, width, height);
+            distributeError(errorBuffer, x, y + 1, quantError, DitheringCoefficients.FLOYD_STEINBERG.BOTTOM, width, height);
+            distributeError(errorBuffer, x + 1, y + 1, quantError, DitheringCoefficients.FLOYD_STEINBERG.BOTTOM_RIGHT, width, height);
         }
     }
     return imageData;
 }
 
+/**
+ * Apply ordered dithering using a Bayer matrix pattern.
+ * 
+ * Ordered dithering uses a fixed threshold matrix to determine whether
+ * to round colors up or down. This creates predictable, repeating patterns
+ * that are useful for consistent training data generation.
+ * 
+ * CHARACTERISTICS:
+ * - Creates regular, predictable patterns
+ * - No error accumulation (each pixel processed independently)
+ * - Good for flat colors and gradients
+ * - Produces consistent results across identical inputs
+ * - Ideal for training models to recognize pattern-based dithering
+ * 
+ * The Bayer matrix provides threshold values that create the
+ * characteristic crosshatch pattern of ordered dithering.
+ * 
+ * @param {ImageData} imageData - Image data to process in-place
+ * @param {number} width - Image width in pixels
+ * @param {number} height - Image height in pixels
+ * @param {number} strength - Dithering strength (0-1 range)
+ * @param {Array<Array<number>>} paletteColors - Target color palette
+ * @param {Array<Array<number>>} bayerMatrix - Threshold matrix for pattern
+ * @returns {ImageData} Modified image data with ordered dithering
+ */
 function orderedDithering(imageData, width, height, strength, paletteColors, bayerMatrix) {
     const data = imageData.data;
     const matrixSize = bayerMatrix.length;
@@ -437,10 +724,12 @@ function orderedDithering(imageData, width, height, strength, paletteColors, bay
 
             const threshold = ((bayerMatrix[y % matrixSize][x % matrixSize] + 0.5) / (matrixSize * matrixSize)) * 255;
 
+            // Adjust color based on Bayer matrix threshold
+            // The threshold shifts the color before quantization, creating the dither pattern
             let adjustedColor = [
-                oldColor[0] + (threshold - 127.5) * strength,
-                oldColor[1] + (threshold - 127.5) * strength,
-                oldColor[2] + (threshold - 127.5) * strength
+                oldColor[0] + (threshold - DitheringCoefficients.ORDERED_THRESHOLD_CENTER) * strength,
+                oldColor[1] + (threshold - DitheringCoefficients.ORDERED_THRESHOLD_CENTER) * strength,
+                oldColor[2] + (threshold - DitheringCoefficients.ORDERED_THRESHOLD_CENTER) * strength
             ];
 
             // Quantize the adjusted color
@@ -454,6 +743,23 @@ function orderedDithering(imageData, width, height, strength, paletteColors, bay
     return imageData;
 }
 
+/**
+ * Distribute quantization error to a neighboring pixel.
+ * 
+ * This helper function is used by error diffusion dithering algorithms
+ * to propagate color quantization errors to nearby pixels. The error
+ * accumulation creates the smooth gradients characteristic of these methods.
+ * 
+ * The function safely handles boundary conditions to prevent buffer overflows.
+ * 
+ * @param {Float32Array} buffer - Error accumulation buffer
+ * @param {number} x - Target pixel X coordinate
+ * @param {number} y - Target pixel Y coordinate
+ * @param {Array<number>} quantError - RGB error values to distribute
+ * @param {number} factor - Fraction of error to apply (0-1 range)
+ * @param {number} width - Image width for bounds checking
+ * @param {number} height - Image height for bounds checking
+ */
 function distributeError(buffer, x, y, quantError, factor, width, height) {
     if (x < 0 || x >= width || y < 0 || y >= height) return;
     const idx = (y * width + x) * 4;
@@ -462,6 +768,26 @@ function distributeError(buffer, x, y, quantError, factor, width, height) {
     buffer[idx + 2] += quantError[2] * factor;
 }
 
+/**
+ * Find the nearest color in a palette using Euclidean distance.
+ * 
+ * This function maps an arbitrary RGB color to its closest match
+ * in a limited palette. The quality of this mapping directly affects
+ * the visual quality of the pixel art output.
+ * 
+ * The function uses Euclidean distance in RGB space, which is
+ * computationally efficient though not perceptually uniform.
+ * For training data, consistency is more important than perfect
+ * perceptual accuracy.
+ * 
+ * OPTIMIZATION NOTE:
+ * For large palettes or batch processing, this could be optimized
+ * with a k-d tree or octree structure.
+ * 
+ * @param {Array<number>} color - RGB color to match [r, g, b]
+ * @param {Array<Array<number>>} palette - Available colors [[r,g,b], ...]
+ * @returns {Array<number>} Closest palette color [r, g, b]
+ */
 function findClosestPaletteColor(color, palette) {
     let closestColor = palette[0];
     let closestDistance = colorDistance(color, closestColor);
@@ -477,8 +803,28 @@ function findClosestPaletteColor(color, palette) {
     return closestColor;
 }
 
+/**
+ * Calculate Euclidean distance between two RGB colors.
+ * 
+ * This measures color similarity for palette matching. While not
+ * perceptually uniform (human vision is more sensitive to green),
+ * Euclidean distance is fast and produces consistent results for
+ * training data generation.
+ * 
+ * The squared distance is returned (without square root) for
+ * efficiency, since we only need relative distances for comparison.
+ * 
+ * ALTERNATIVE APPROACHES:
+ * - Weighted Euclidean: Weight green channel higher (matches human vision)
+ * - LAB color space: More perceptually uniform but computationally expensive
+ * - Delta E: Industry standard for color difference but complex
+ * 
+ * @param {Array<number>} color1 - First RGB color [r, g, b]
+ * @param {Array<number>} color2 - Second RGB color [r, g, b]
+ * @returns {number} Squared Euclidean distance between colors
+ */
 function colorDistance(color1, color2) {
-    // Use Euclidean distance
+    // Use squared Euclidean distance (skip sqrt for efficiency)
     const rDiff = color1[0] - color2[0];
     const gDiff = color1[1] - color2[1];
     const bDiff = color1[2] - color2[2];

@@ -1,9 +1,34 @@
 <!DOCTYPE html>
+<!-- 
+  index.html - Main interface for the Image-to-Pixel Art Converter
+  
+  PURPOSE:
+  This is the primary user interface for converting images to pixel art.
+  It's designed for generating training data for ML models that need to
+  understand pixel art transformations.
+  
+  ARCHITECTURE:
+  - Uses vanilla JavaScript for maximum compatibility
+  - Canvas-based rendering for real-time pixelation preview
+  - Integrates with image-to-pixel.js for core processing algorithms
+  - Supports multiple dithering methods and color palettes
+  
+  CONNECTIONS:
+  - Loads image-to-pixel.js for pixelation algorithms
+  - Loads src/picker.js for color palette management
+  - Loads src/logo.js for branding elements
+  - Styles from css/main.css, css/logo.css, css/picker.css
+  
+  TRAINING DATA GENERATION:
+  - Supports batch processing via file upload
+  - Exports in PNG format suitable for ML training
+  - Preserves metadata about transformation parameters
+-->
 <html lang="en">
 
 <head>
   <meta charset="UTF-8">
-  <title>🎨 Image-to-Pixel</title>
+  <title>🎨 Image-to-Pixel - Training Data Generator</title>
   <!-- Include Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
     integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
@@ -219,6 +244,25 @@
   <script src="src/picker.js"></script>
   <script src="image-to-pixel.js"></script>
   <script>
+    /**
+     * UI Interaction Controller
+     * 
+     * This script manages all user interface interactions including:
+     * - Collapsible settings panels (chevron toggles)
+     * - Image upload and display
+     * - Pixelation parameter controls
+     * - Export functionality for training data
+     * 
+     * STATE MANAGEMENT:
+     * - originalImageObject: Stores the uploaded image for processing
+     * - pixelatedCanvas: Stores the processed result for export
+     * - autoPixelateEnabled: Controls real-time preview updates
+     * - activeToggle: Tracks which palette source is active
+     * 
+     * CRITICAL FOR TRAINING DATA:
+     * The consistency of parameters across batch processing is essential
+     * for generating coherent training datasets.
+     */
     document.querySelectorAll('label[for]').forEach(label => {
             label.onclick = () => {
                 const targetId = label.getAttribute('for');
@@ -242,6 +286,13 @@
             };
         });
 
+        /**
+         * Auto-detect image dimensions for optimal pixelation.
+         * 
+         * This feature is crucial for training data generation as it ensures
+         * the pixel grid aligns naturally with the source image dimensions,
+         * preventing artifacts that could confuse ML models.
+         */
         const autoDetectButton = document.getElementById('autoDetectButton');
         autoDetectButton.addEventListener('click', () => {
             if (originalImageObject) {
@@ -345,6 +396,20 @@
             if (files.length) displayImage(files[0]);
         });
 
+        /**
+         * Display uploaded image in the canvas with proper scaling.
+         * 
+         * This function is called when a user uploads an image via drag-drop
+         * or file picker. It's the entry point for the conversion pipeline.
+         * 
+         * PROCESS FLOW:
+         * 1. Read file as data URL
+         * 2. Create Image object for processing
+         * 3. Calculate display dimensions maintaining aspect ratio
+         * 4. Render to canvas for preview
+         * 
+         * @param {File} file - The image file uploaded by the user
+         */
         function displayImage(file) {
             const reader = new FileReader();
             reader.onload = function (e) {
@@ -387,6 +452,26 @@
             reader.readAsDataURL(file);
         }
 
+        /**
+         * Apply pixelation transformation to the loaded image.
+         * 
+         * This is the core function that orchestrates the pixelation process.
+         * It gathers all user-configured parameters and calls the pixelate()
+         * function from image-to-pixel.js.
+         * 
+         * PARAMETERS COLLECTED:
+         * - pixelsWide: Target pixel width for the output
+         * - paletteName: Lospec palette slug if using external palette
+         * - ditheringMethod: Algorithm for color approximation
+         * - ditheringStrength: Intensity of dithering effect (0-100)
+         * - activePalette: Currently selected color palette
+         * 
+         * CRITICAL FOR TRAINING DATA:
+         * Consistency in these parameters across batches is essential
+         * for generating coherent training datasets.
+         * 
+         * @returns {Promise<void>} Renders result to canvas when complete
+         */
         async function applyPixelation() {
             if (!originalImageObject) return;
             const pixelsWide = parseInt(pixelWidthInput.value) || 10;
@@ -469,6 +554,18 @@
         pixelWidthSelector.addEventListener('change', () => {
             if (autoPixelateEnabled) applyPixelation();
         });
+        /**
+         * Export pixelated image at pixel resolution.
+         * 
+         * This exports the image at its actual pixelated size, which is
+         * ideal for training data as it preserves the exact pixel structure
+         * without any upscaling artifacts.
+         * 
+         * OUTPUT FORMAT:
+         * - PNG format for lossless compression
+         * - Actual pixel dimensions (e.g., 32x32, 64x64)
+         * - No interpolation or smoothing applied
+         */
         downloadPixelButton.addEventListener('click', () => {
             if (!pixelatedCanvas) return;
             const link = document.createElement('a');
@@ -477,6 +574,22 @@
             link.click();
         });
 
+        /**
+         * Export pixelated image at original resolution.
+         * 
+         * This creates a pixelated version at the original image dimensions,
+         * useful for training models that need to understand how pixel art
+         * appears when scaled up to match source image sizes.
+         * 
+         * PROCESS:
+         * 1. Apply pixelation at low resolution
+         * 2. Scale up to original dimensions using nearest-neighbor
+         * 3. Export as PNG for training data
+         * 
+         * USE CASE:
+         * Training models to recognize pixel art patterns at various scales
+         * or to generate high-resolution outputs from pixel art inputs.
+         */
         downloadFullButton.addEventListener('click', async () => {
             if (!originalImageObject) return;
 

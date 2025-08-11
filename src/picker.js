@@ -1,3 +1,60 @@
+/**
+ * picker.js - Color palette management system for training data generation
+ * 
+ * PURPOSE:
+ * This module manages color palettes for the pixel art converter, allowing users
+ * to select from curated palettes or create custom ones. Consistent palettes are
+ * crucial for generating coherent training datasets.
+ * 
+ * ARCHITECTURE:
+ * - Integrates Pickr color picker library for color selection
+ * - Manages both default and custom palettes
+ * - Persists custom palettes to localStorage
+ * - Supports palette import/export for sharing
+ * 
+ * CONNECTIONS:
+ * - Called by index.html for palette UI management
+ * - Provides activePalette to image-to-pixel.js for color quantization
+ * - Uses Pickr library (loaded via CDN in index.html)
+ * 
+ * TRAINING DATA CONSIDERATIONS:
+ * - Consistent palettes across batches ensure coherent datasets
+ * - Popular palettes (PICO-8, Endesga 32) are industry standards
+ * - Custom palettes allow domain-specific training data
+ */
+
+/**
+ * Configuration constants for palette management
+ */
+const PaletteConstants = {
+    /** LocalStorage key for persisting custom palettes */
+    STORAGE_KEY: 'color-palettes',
+    /** Default color when adding new colors to palette */
+    DEFAULT_COLOR: '#ffffff',
+    /** Maximum palette name length to prevent UI issues */
+    MAX_PALETTE_NAME_LENGTH: 50,
+    /** Maximum colors per palette for performance */
+    MAX_COLORS_PER_PALETTE: 256
+};
+
+/**
+ * Curated collection of popular pixel art palettes.
+ * 
+ * These palettes are carefully selected for their use in pixel art and
+ * game development. They provide excellent starting points for training
+ * data generation with authentic color schemes.
+ * 
+ * PALETTE CHARACTERISTICS:
+ * - Sweet Canyon Extended 64: Large palette for detailed work
+ * - PICO-8: Classic 16-color fantasy console palette
+ * - Endesga 32: Versatile 32-color general purpose palette
+ * - Resurrect 64: Comprehensive palette for complex scenes
+ * 
+ * Each palette includes:
+ * - name: Display name for UI
+ * - author: Original creator for attribution
+ * - colors: Hex color codes (without # prefix)
+ */
 const DEFAULT_PALETTES = sortPalettesByName([
     { "name": "Sweet Canyon Extended 64", "author": "Mr Slime", "colors": ["0f0e11", "2d2c33", "40404a", "51545c", "6b7179", "7c8389", "a8b2b6", "d5d5d5", "eeebe0", "f1dbb1", "eec99f", "e1a17e", "cc9562", "ab7b49", "9a643a", "86482f", "783a29", "6a3328", "541d29", "42192c", "512240", "782349", "8b2e5d", "a93e89", "d062c8", "ec94ea", "f2bdfc", "eaebff", "a2fafa", "64e7e7", "54cfd8", "2fb6c3", "2c89af", "25739d", "2a5684", "214574", "1f2966", "101445", "3c0d3b", "66164c", "901f3d", "bb3030", "dc473c", "ec6a45", "fb9b41", "f0c04c", "f4d66e", "fffb76", "ccf17a", "97d948", "6fba3b", "229443", "1d7e45", "116548", "0c4f3f", "0a3639", "251746", "48246d", "69189c", "9f20c0", "e527d2", "ff51cf", "ff7ada", "ff9edb"] },
     { "name": "Beached Boogaloo", "author": ".tomais", "colors": ["ff0b20", "8f0434", "500037", "a0ff00", "57e71e", "0ea717", "057833", "2cdeef", "2483e7", "153ab7", "0d0a87", "ff0b88", "a60fff", "6409cf", "eaef30", "ff880b", "b75308", "802202", "000000", "231940", "514378", "ffffff", "73a3a7", "366770", "f7b771", "c77650", "974c38", "873939", "601e2c", "300c1f"] },
@@ -20,8 +77,24 @@ const DEFAULT_PALETTES = sortPalettesByName([
     { "name": "Journey", "author": "🍍PineappleOnPizza🍍(Comissions Open)", "colors": ["050914", "110524", "3b063a", "691749", "9c3247", "d46453", "f5a15d", "ffcf8e", "ff7a7d", "ff417d", "d61a88", "94007a", "42004e", "220029", "100726", "25082c", "3d1132", "73263d", "bd4035", "ed7b39", "ffb84a", "fff540", "c6d831", "77b02a", "429058", "2c645e", "153c4a", "052137", "0e0421", "0c0b42", "032769", "144491", "488bd4", "78d7ff", "b0fff1", "faffff", "c7d4e1", "928fb8", "5b537d", "392946", "24142c", "0e0f2c", "132243", "1a466b", "10908e", "28c074", "3dff6e", "f8ffb8", "f0c297", "cf968c", "8f5765", "52294b", "0f022e", "35003b", "64004c", "9b0e3e", "d41e3c", "ed4c40", "ff9757", "d4662f", "9c341a", "691b22", "450c28", "2d002e"] },
 
 ]);
+
+/**
+ * Global state for auto-pixelation feature.
+ * When enabled, changes to palette trigger immediate re-rendering.
+ * This is useful for real-time preview during palette selection.
+ */
 let autoPixelateEnabled = false;
 
+/**
+ * Sort palettes alphabetically by name for consistent UI display.
+ * 
+ * This ensures palettes appear in a predictable order regardless
+ * of how they were added, improving user experience when selecting
+ * palettes for training data generation.
+ * 
+ * @param {Array<Object>} palettes - Array of palette objects with name property
+ * @returns {Array<Object>} New array sorted by palette name (case-insensitive)
+ */
 function sortPalettesByName(palettes) {
     return palettes.slice().sort((a, b) => {
         const nameA = a.name.toUpperCase();
@@ -35,12 +108,37 @@ function sortPalettesByName(palettes) {
         return 0;
     });
 }
-const PALETTE_STORAGE_KEY = 'color-palettes';
+/** LocalStorage key for persisting custom palettes across sessions */
+const PALETTE_STORAGE_KEY = PaletteConstants.STORAGE_KEY;
+
+/**
+ * User-created custom palettes loaded from localStorage.
+ * These persist across sessions, allowing users to build
+ * a library of palettes for specific training datasets.
+ */
 let customPalettes = loadPalettes();
+
+/**
+ * Currently active palette used for pixelation.
+ * This is passed to image-to-pixel.js for color quantization.
+ * Initialized with the first default palette.
+ */
 let activePalette = DEFAULT_PALETTES[0].colors.map(color => {
     return color.startsWith('#') ? color : `#${color}`;
 });
 
+/**
+ * Initialize Pickr color picker instance.
+ * 
+ * Pickr provides an intuitive color selection interface for
+ * editing individual colors within a palette. This is essential
+ * for fine-tuning palettes for specific training data needs.
+ * 
+ * CONFIGURATION:
+ * - theme: 'nano' for compact UI that fits well in sidebar
+ * - components: Enabled HSV, hex input for precise color control
+ * - default: White color as starting point
+ */
 const pickr = Pickr.create({
     el: '#hidden-picker',
     theme: 'nano',
@@ -57,14 +155,55 @@ const pickr = Pickr.create({
     }
 });
 
+/**
+ * Load custom palettes from browser localStorage.
+ * 
+ * This enables palette persistence across sessions, allowing users
+ * to build a library of palettes for different training datasets.
+ * Returns empty array if no palettes are stored.
+ * 
+ * @returns {Array<Object>} Array of custom palette objects
+ */
 function loadPalettes() {
-    return JSON.parse(localStorage.getItem(PALETTE_STORAGE_KEY)) || [];
+    try {
+        return JSON.parse(localStorage.getItem(PALETTE_STORAGE_KEY)) || [];
+    } catch (error) {
+        console.warn('Failed to load custom palettes from localStorage:', error);
+        return [];
+    }
 }
 
+/**
+ * Save custom palettes to browser localStorage.
+ * 
+ * Persists the current set of custom palettes for future sessions.
+ * This is called whenever palettes are added, modified, or deleted.
+ * 
+ * STORAGE FORMAT:
+ * JSON array of palette objects, each containing:
+ * - name: Palette identifier
+ * - author: Creator attribution
+ * - colors: Array of hex color strings
+ */
 function savePalettes() {
-    localStorage.setItem(PALETTE_STORAGE_KEY, JSON.stringify(customPalettes));
+    try {
+        localStorage.setItem(PALETTE_STORAGE_KEY, JSON.stringify(customPalettes));
+    } catch (error) {
+        console.error('Failed to save palettes to localStorage:', error);
+        alert('Unable to save palette. Storage may be full.');
+    }
 }
 
+/**
+ * Update palette dropdown selectors with current palette lists.
+ * 
+ * This function populates both the default and custom palette
+ * dropdowns with available options. It's called whenever palettes
+ * are added, deleted, or modified to keep the UI in sync.
+ * 
+ * The separation of default and custom palettes helps users
+ * distinguish between curated palettes and their own creations.
+ */
 function updateSelectors() {
     const defaultSelector = document.getElementById('default-palette-selector');
     const customSelector = document.getElementById('custom-palette-selector');
@@ -86,6 +225,20 @@ function updateSelectors() {
     });
 }
 
+/**
+ * Render the active palette's colors in the UI.
+ * 
+ * This function creates the visual representation of the current
+ * palette, showing color swatches that can be clicked to edit
+ * or removed from the palette. It's the primary interface for
+ * palette customization.
+ * 
+ * FEATURES:
+ * - Click swatches to edit colors with Pickr
+ * - X buttons to remove colors from palette
+ * - Hex codes displayed for reference
+ * - Auto-triggers pixelation if auto-mode is enabled
+ */
 function updateColorList() {
     const colorList = document.getElementById('selected-colors');
     colorList.innerHTML = '';
@@ -121,6 +274,15 @@ function updateColorList() {
     if (autoPixelateEnabled) applyPixelation();
 }
 
+/**
+ * Handle color changes from the Pickr color picker.
+ * 
+ * When a user modifies a color using the picker, this updates
+ * the active palette and refreshes the display. This enables
+ * real-time palette editing for training data customization.
+ * 
+ * @param {Object} color - Pickr color object with color data
+ */
 pickr.on('change', (color) => {
     if (color && pickr.currentIndex !== undefined) {
         const newColor = color.toHEXA().toString();
@@ -166,8 +328,19 @@ document.getElementById('custom-palette-selector').addEventListener('change', (e
     updateColorList();
 });
 
+/**
+ * Add a new color to the active palette.
+ * 
+ * Adds a default white color that can then be edited.
+ * This allows building palettes incrementally for specific
+ * training data requirements.
+ */
 document.getElementById('add-color-button').addEventListener('click', () => {
-    activePalette.push('#ffffff');
+    if (activePalette.length >= PaletteConstants.MAX_COLORS_PER_PALETTE) {
+        alert(`Maximum ${PaletteConstants.MAX_COLORS_PER_PALETTE} colors per palette`);
+        return;
+    }
+    activePalette.push(PaletteConstants.DEFAULT_COLOR);
     updateColorList();
 });
 
@@ -240,6 +413,20 @@ paletteFileInput.addEventListener('change', (event) => {
     }
 });
 
+/**
+ * Add an uploaded palette to the custom palettes collection.
+ * 
+ * This function handles palette imports, ensuring unique names
+ * and valid formats. It's crucial for sharing palettes between
+ * users or importing palettes from external sources.
+ * 
+ * NAME COLLISION HANDLING:
+ * If a palette with the same name exists, appends a number
+ * suffix to create a unique name (e.g., "MyPalette-1").
+ * 
+ * @param {Object} palette - Palette object with name, colors, and optional author
+ * @returns {number} Index of the added palette in customPalettes array
+ */
 function addUploadedPalette(palette) {
     if (!palette || !palette.name || !Array.isArray(palette.colors)) {
         console.warn("Invalid palette format. Ensure the palette has a name and a list of colors.");
@@ -290,6 +477,16 @@ downloadPaletteButton.addEventListener('click', () => {
     link.click();
 });
 
+/**
+ * Update palette dropdown selectors with current palette lists.
+ * 
+ * This function populates both the default and custom palette
+ * dropdowns with available options. It's called whenever palettes
+ * are added, deleted, or modified to keep the UI in sync.
+ * 
+ * The separation of default and custom palettes helps users
+ * distinguish between curated palettes and their own creations.
+ */
 function updateSelectors() {
     const defaultSelector = document.getElementById('default-palette-selector');
     const customSelector = document.getElementById('custom-palette-selector');
@@ -311,12 +508,43 @@ function updateSelectors() {
     });
 }
 
+/**
+ * Save custom palettes to browser localStorage.
+ * 
+ * Persists the current set of custom palettes for future sessions.
+ * This is called whenever palettes are added, modified, or deleted.
+ * 
+ * STORAGE FORMAT:
+ * JSON array of palette objects, each containing:
+ * - name: Palette identifier
+ * - author: Creator attribution
+ * - colors: Array of hex color strings
+ */
 function savePalettes() {
-    localStorage.setItem(PALETTE_STORAGE_KEY, JSON.stringify(customPalettes));
+    try {
+        localStorage.setItem(PALETTE_STORAGE_KEY, JSON.stringify(customPalettes));
+    } catch (error) {
+        console.error('Failed to save palettes to localStorage:', error);
+        alert('Unable to save palette. Storage may be full.');
+    }
 }
 
+/**
+ * Load custom palettes from browser localStorage.
+ * 
+ * This enables palette persistence across sessions, allowing users
+ * to build a library of palettes for different training datasets.
+ * Returns empty array if no palettes are stored.
+ * 
+ * @returns {Array<Object>} Array of custom palette objects
+ */
 function loadPalettes() {
-    return JSON.parse(localStorage.getItem(PALETTE_STORAGE_KEY)) || [];
+    try {
+        return JSON.parse(localStorage.getItem(PALETTE_STORAGE_KEY)) || [];
+    } catch (error) {
+        console.warn('Failed to load custom palettes from localStorage:', error);
+        return [];
+    }
 }
 
 updateSelectors();
